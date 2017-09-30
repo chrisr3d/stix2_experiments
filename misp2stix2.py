@@ -16,13 +16,27 @@ non_indicator_attributes = ['text', 'comment', 'other', 'link', 'target-user', '
 def loadEvent(args, pathname):
     try:
         filename = args[1]
-        print(filename)
         tempFile = open(filename, 'r')
         events = json.loads(tempFile.read())
         return events
     except:
         print(json.dumps({'success' : 0, 'message' : 'The temporary MISP export file could not be read'}))
         sys.exit(1)
+        
+def saveFile(args, pathname, package):
+    
+#    try:
+    tab_args = args[1].split('.')
+    filename = "{}/tmp/misp.stix.{}{}.{}".format(pathname, tab_args[-4], tab_args[-3], tab_args[-1])
+    print(package)
+    d = os.path.dirname(filename)
+    if not os.path.exists(d):
+        os.makedirs(d)
+    with open(filename, 'w') as f:
+        f.write('{"package": ' + str(package) + '}')
+#    except:
+#        print(json.dumps({'success' : 0, 'message' : 'The STIX file could not be written'}))
+#        sys.exit(1)
         
 # converts timestamp to the format used by STIX
 def getDateFromTimestamp(timestamp):
@@ -33,6 +47,36 @@ def setIdentity(event):
     identity = Identity(type="identity", id="identity--{}".format(org["uuid"]),
                         name=org["name"], identity_class="organization")
     return identity
+
+def readAttributes(event, object_refs):
+    attributes = []
+    for attribute in event["Attribute"]:
+        if attribute["type"] in non_indicator_attributes:
+            handleNonIndicatorAttribute(event, object_refs, attributes, attribute)
+        else:
+            handleIndicatorAttribute(event, object_refs, attributes, attribute)
+    return attributes
+
+def handleNonIndicatorAttribute(event, object_refs, attributes, attribute):
+    return
+
+def handleIndicatorAttribute(event, object_refs, attributes, attribute):
+    indic_id = "indicator--{}".format(attribute['uuid'])
+    indicator = Indicator(valid_from=getDateFromTimestamp(int(attribute["timestamp"])), type='indicator',
+                          labels=['malicious activity'], pattern="{}".format(definePattern(attribute)),
+                          id=indic_id)
+#    indicator.id = indic_id
+#    indicator.labels = ['malicious activity']
+#    indicator.pattern = "{}".format(definePattern(attribute))
+    attributes.append(indicator)
+    object_refs.append(indic_id)
+    
+def definePattern(attribute):
+    attr_type = attribute['type']
+    pattern =""
+    if 'md5' in attr_type or 'sha' in attr_type:
+        pattern += 'file:hashes.{} = \'{}\''.format(attr_type, attribute['value'])
+    return [pattern]
 
 def eventReport(event, identity):
     timestamp = getDateFromTimestamp(int(event["publish_timestamp"]))
@@ -66,10 +110,14 @@ def main(args):
     object_refs = []
     identity = setIdentity(event)
     SDOs.append(identity)
+    attributes = readAttributes(event, object_refs)
     report = eventReport(event, identity)
     SDOs.append(report)
+    for attribute in attributes:
+        SDOs.append(attribute)
     stix_package = generateEventPackage(event, SDOs)
-    print(stix_package)
+    saveFile(args, pathname, stix_package)
+#    print(stix_package)
 
 if __name__ == "__main__":
     main(sys.argv)
