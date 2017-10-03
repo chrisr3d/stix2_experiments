@@ -93,7 +93,8 @@ def addCourseOfAction(object_refs, attributes, galaxy, identity):
     
 def addIntrusionSet(object_refs, attributes, galaxy, identity):
     intrusionSet_id = "intrusion-set--{}".format(galaxy['uuid'])
-    intrusion_args = {'id': intrusionSet_id, 'type': 'intrusion-set'}
+    name = galaxy['GalaxyCluster'][0]['value']
+    intrusion_args = {'id': intrusionSet_id, 'type': 'intrusion-set', 'name': name}
     intrusionSet = IntrusionSet(**intrusion_args)
     attributes.append(intrusionSet)
     object_refs.append(intrusionSet_id)
