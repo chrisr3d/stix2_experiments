@@ -52,9 +52,12 @@ def readAttributes(event, object_refs, identity):
     attributes = []
     for attribute in event["Attribute"]:
         if attribute["type"] in non_indicator_attributes:
-            handleNonIndicatorAttribute(event, object_refs, attributes, attribute, identity)
+            handleNonIndicatorAttribute(object_refs, attributes, attribute, identity)
         else:
-            handleIndicatorAttribute(event, object_refs, attributes, attribute, identity)
+            if attribute['to_ids'] == 'false':
+                handleIndicatorAttribute(object_refs, attributes, attribute, identity)
+            else:
+                addObservedData(object_refs, attributes, attribute, identity)
     if event['Galaxy']:
         galaxies = event['Galaxy']
         for galaxy in galaxies:
@@ -79,8 +82,14 @@ def addAttackPattern(object_refs, attributes, galaxy, identity):
     object_refs.append(attack_id)
 
 def addCampaign(object_refs, attributes, galaxy, identity):
-    campaign_id = "campaign--{}".format(galaxy['uuid'])
-    campaign_args = {}
+    cluster = galaxy['GalaxyCluster'][0]
+    campaign_id = "campaign--{}".format(cluster['uuid'])
+    name = cluster['value']
+    description = cluster['description']
+    campaign_args = {'id': campaign_id, 'type': 'campaign', 'name': name, 'description': description,
+                     'created_by_ref': identity}
+    meta = cluster['meta']
+    addAliases(meta, campaign_args)
     campaign = Campaign(**campaign_args)
     attributes.append(campaign)
     object_refs.append(campaign_id)
@@ -92,9 +101,14 @@ def addCourseOfAction(object_refs, attributes, galaxy, identity):
     object_refs.append(courseOfAction_id)
     
 def addIntrusionSet(object_refs, attributes, galaxy, identity):
-    intrusionSet_id = "intrusion-set--{}".format(galaxy['uuid'])
-    name = galaxy['GalaxyCluster'][0]['value']
-    intrusion_args = {'id': intrusionSet_id, 'type': 'intrusion-set', 'name': name}
+    cluster = galaxy['GalaxyCluster'][0]
+    intrusionSet_id = "intrusion-set--{}".format(cluster['uuid'])
+    name = cluster['value']
+    description = cluster['description']
+    intrusion_args = {'id': intrusionSet_id, 'type': 'intrusion-set', 'name': name, 'description': description,
+                      'created_by_ref': identity}
+    meta = cluster['meta']
+    addAliases(meta, intrusion_args)
     intrusionSet = IntrusionSet(**intrusion_args)
     attributes.append(intrusionSet)
     object_refs.append(intrusionSet_id)
@@ -109,18 +123,26 @@ def addMalware(object_refs, attributes, galaxy, identity):
 def addObservedData(object_refs, attributes, attribute, identity):
     observedData_id = "observed-data--{}".format(attribute['uuid'])
     timestamp = getDateFromTimestamp(int(attribute['timestamp']))
-    if attribute['type'] == 'attachment':
-        datatype = 'file'
-    objects = {'0': {'type': datatype, "name": attribute['value']}}
+    object0 = defineObservableType(attribute['type'], attribute['value'])
+    # OBSERVABLE TYPES ARE CRAP
+    objects = {'0': object0}
     observedData_args = {'id': observedData_id, 'type': 'observed-data', 'number_observed': 1,
-                         'first_observed': timestamp, 'last_observed': timestamp, 'objects': objects}
+                         'first_observed': timestamp, 'last_observed': timestamp, 'objects': objects,
+                         'created_by_ref': identity}
     observedData = ObservedData(**observedData_args)
     attributes.append(observedData)
     object_refs.append(observedData_id)
 
 def addThreatActor(object_refs, attributes, galaxy, identity):
-    threatActor_id = "threat-actor--{}".format(galaxy['uuid'])
-    threatActor_args = {}
+    cluster = galaxy['GalaxyCluster'][0]
+    threatActor_id = "threat-actor--{}".format(cluster['uuid'])
+    name = cluster['value']
+    description = cluster['description']
+    labels = ['crime-syndicate'] # Arbitrary value as a first test
+    threatActor_args = {'id': threatActor_id, 'type': 'threat-actor', 'name': name, 'description': description,
+                        'labels': labels, 'created_by_ref': identity}
+    meta = cluster['meta']
+    addAliases(meta, threatActor_args)
     threatActor = ThreatActor(**threatActor_args)
     attributes.append(threatActor)
     object_refs.append(threatActor_id)
@@ -137,18 +159,81 @@ def addVulnerability(object_refs, attributes, attribute, identity):
     name = attribute['value']
     ext_refs = [{'source_name': 'cve',
                  'external_id': name}]
-    vulnerability = Vulnerability(type='vulnerability', id=vuln_id, external_references=ext_refs)
+    vuln_args = {'type': 'vulnerability', 'id': vuln_id, 'external_references': ext_refs, 'name': name,
+                 'created_by_ref': identity}
+    vulnerability = Vulnerability(**vuln_args)
     attributes.append(vulnerability)
     object_refs.append(vuln_id)
     
-def handleNonIndicatorAttribute(event, object_refs, attributes, attribute, identity):
+def addAliases(meta, argument):
+    if meta['synonyms']:
+        aliases = []
+        for a in meta['synonyms']:
+            aliases.append(a)
+        argument['aliases'] = aliases
+        
+def defineObservableType(dtype, val):
+    object0 = {}
+#    if dtype == '':
+#        datatype = 'artifact'
+#    elif dtype == '':
+#        datatype = 'autonomous-system'
+#    elif dtype == '':
+#        datatype = 'directory'
+#    elif dtype == '':
+#        datatype = 'domain-name'
+#    el
+    if 'email' in dtype and 'name' not in dtype and ('src' in dtype or 'dst' in dtype or 'target' in dtype):
+        object0['type'] = 'email-address'
+        object0['value'] = val
+    elif 'email' in dtype and ('body' in dtype or 'subject' in dtype or 'header' in dtype or 'reply' in dtype):
+        object0['type'] = 'email-message'
+        object0['subject'] = val
+        object0['is_multipart'] = 'false'
+    elif 'attachment' in dtype:
+        object0['type'] = 'file'
+        object0['name'] = val
+#    elif dtype == '':
+#        datatype = 'ipv4-addr'
+#    elif dtype == '':
+#        datatype = 'ipv6-addr'
+#    elif dtype == '':
+#        datatype = 'mac-addr'
+#    elif dtype == 'mutex':
+#        datatype = 'mutex'
+#    elif dtype == '':
+#        datatype = 'network-traffic'
+#    elif dtype == '':
+#        datatype = 'process'
+#    elif dtype == '':
+#        datatype = 'software'
+    elif dtype == 'url':
+        object0['type'] = 'url'
+        object0['value'] = val
+#    elif dtype == '':
+#        datatype = 'user-account'
+    elif 'regkey' in dtype:
+        object0['type'] = 'windows-registry-key'
+        object0['key'] = val
+    elif 'x509' in dtype:
+        object0['type'] = 'x509-certificate'
+    elif 'md5' in dtype or 'sha' in dtype:
+        object0['type'] = 'file'
+        object0['hashes'] = {dtype: val}
+    else:
+        object0['type'] = 'file' # CRAP BEFORE FINDING HOW TO HANDLE ALL THE CASES \o/
+        object0['name'] = val
+    return object0
+    
+def handleNonIndicatorAttribute(object_refs, attributes, attribute, identity):
     attr_type = attribute['type']
     if attr_type == "vulnerability":
         addVulnerability(object_refs, attributes, attribute, identity)
-    elif "target" in attr_type or attr_type == "attachment":
+#    elif "target" in attr_type or attr_type == "attachment":
+    else:
         addObservedData(object_refs, attributes, attribute, identity)
 
-def handleIndicatorAttribute(event, object_refs, attributes, attribute, identity):
+def handleIndicatorAttribute(object_refs, attributes, attribute, identity):
     indic_id = "indicator--{}".format(attribute['uuid'])
     category = attribute['category']
     killchain = [{'kill_chain_name': 'misp-category',
@@ -177,11 +262,11 @@ def definePattern(attribute):
         pattern += 'file:hashes.{} = \'{}\''.format(attr_type, attribute['value'])
     return [pattern]
 
-def eventReport(event, identity):
+def eventReport(event, object_refs, identity):
     timestamp = getDateFromTimestamp(int(event["publish_timestamp"]))
     name = event["info"]
     report = Report(type="report", id="report--{}".format(event["uuid"]), created_by_ref=identity["id"],
-                    name=name, published=timestamp, labels=["indicators"])
+                    name=name, published=timestamp, labels=["indicators"], object_refs=object_refs)
     return report
 
 def generateEventPackage(event, SDOs):
@@ -212,7 +297,7 @@ def main(args):
     identity = setIdentity(event)
     SDOs.append(identity)
     attributes = readAttributes(event, object_refs, identity)
-    report = eventReport(event, identity)
+    report = eventReport(event, object_refs, identity)
     SDOs.append(report)
     for attribute in attributes:
         SDOs.append(attribute)
