@@ -115,7 +115,7 @@ def addCampaign(object_refs, attributes, galaxy, identity):
     campaign_id = "campaign--{}".format(cluster['uuid'])
     name = cluster['value']
     description = cluster['description']
-    labels = 'misp:to_ids:{}'.format(attribute['to_ids'])
+    labels = 'misp:to_ids=\"{}\"'.format(attribute['to_ids'])
     campaign_args = {'id': campaign_id, 'type': 'campaign', 'name': name, 'description': description,
                      'created_by_ref': identity, 'labels': labels}
     meta = cluster['meta']
@@ -136,7 +136,7 @@ def addCustomObject(object_refs, attributes, attribute, identity):
     customObject_type = 'x-misp-object'.format(attribute['type'])
     to_ids = attribute['to_ids']
     value = attribute['value']
-    labels = 'misp:to_ids:{}'.format(attribute['to_ids'])
+    labels = 'misp:to_ids=\"{}\"'.format(attribute['to_ids'])
     customObject_args = {'type': customObject_type, 'id': customObject_id, 'timestamp': timestamp,
                          'to_ids': to_ids, 'value': value, 'created_by_ref': identity, 'labels': labels}
     if attribute['comment']:
@@ -150,7 +150,7 @@ def addIntrusionSet(object_refs, attributes, galaxy, identity):
     intrusionSet_id = "intrusion-set--{}".format(cluster['uuid'])
     name = cluster['value']
     description = cluster['description']
-    labels = 'misp:to_ids:{}'.format(attribute['to_ids'])
+    labels = 'misp:to_ids=\"{}\"'.format(attribute['to_ids'])
     intrusion_args = {'id': intrusionSet_id, 'type': 'intrusion-set', 'name': name, 'description': description,
                       'created_by_ref': identity, 'labels': labels}
     meta = cluster['meta']
@@ -172,7 +172,7 @@ def addObservedData(object_refs, attributes, attribute, identity):
     object0 = defineObservableType(attribute['type'], attribute['value'])
     # OBSERVABLE TYPES ARE CRAP
     objects = {'0': object0}
-    labels = 'misp:to_ids:{}'.format(attribute['to_ids'])
+    labels = 'misp:to_ids=\"{}\"'.format(attribute['to_ids'])
     observedData_args = {'id': observedData_id, 'type': 'observed-data', 'number_observed': 1,
                          'first_observed': timestamp, 'last_observed': timestamp, 'objects': objects,
                          'created_by_ref': identity, 'labels': labels}
@@ -206,7 +206,7 @@ def addVulnerability(object_refs, attributes, attribute, identity):
     name = attribute['value']
     ext_refs = [{'source_name': 'cve',
                  'external_id': name}]
-    labels = 'misp:to_ids:{}'.format(attribute['to_ids'])
+    labels = 'misp:to_ids=\"{}\"'.format(attribute['to_ids'])
     vuln_args = {'type': 'vulnerability', 'id': vuln_id, 'external_references': ext_refs, 'name': name,
                  'created_by_ref': identity, 'labels': labels}
     vulnerability = Vulnerability(**vuln_args)
@@ -286,7 +286,7 @@ def handleIndicatorAttribute(object_refs, attributes, attribute, identity):
     category = attribute['category']
     killchain = [{'kill_chain_name': 'misp-category',
                  'phase_name': category}]
-    labels = 'misp:to_ids:{}'.format(attribute['to_ids'])
+    labels = 'misp:to_ids=\"{}\"'.format(attribute['to_ids'])
     args_indicator = {'valid_from': getDateFromTimestamp(int(attribute['timestamp'])), 'type': 'indicator',
                       'labels': labels, 'pattern': [definePattern(attribute)], 'id': indic_id,
                       'created_by_ref': identity}
@@ -369,7 +369,9 @@ def main(args):
     attributes = readAttributes(event, identity, object_refs, external_refs)
     report = eventReport(event, identity, object_refs, external_refs)
     SDOs.append(report)
-    stix_package = generateEventPackage(event, attributes)
+    for attribute in attributes:
+        SDOs.append(attribute)
+    stix_package = generateEventPackage(event, SDOs)
     saveFile(args, pathname, stix_package)
     print(1)
 #    print(stix_package)
