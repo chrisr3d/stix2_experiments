@@ -16,6 +16,7 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys, json, os, datetime, re
+import pymisp 
 from stix2 import *
 
 namespace = ['https://github.com/MISP/MISP', 'MISP']
@@ -169,14 +170,14 @@ def getDateFromTimestamp(timestamp):
     return datetime.datetime.utcfromtimestamp(timestamp).isoformat() + "+00:00"
 
 def setIdentity(event):
-    org = event["Orgc"]
+    org = event.Orgc
     identity = Identity(type="identity", id="identity--{}".format(org["uuid"]),
                         name=org["name"], identity_class="organization")
     return identity
 
 def readAttributes(event, identity, object_refs, external_refs):
     attributes = []
-    for attribute in event["Attribute"]:
+    for attribute in event.attributes:
         attr_type = attribute['type']
         if attr_type not in mispTypesMapping:
             continue
@@ -198,15 +199,15 @@ def readAttributes(event, identity, object_refs, external_refs):
             galaxyType = galaxy['type']
             if 'attack-pattern' in galaxyType:
                 addAttackPattern(object_refs, attributes, galaxy, identity)
+            elif 'course' in galaxyType:
+                addCourseOfAction(object_refs, attributes, galaxy, identity)
             elif 'intrusion' in galaxyType:
                 addIntrusionSet(object_refs, attributes, galaxy, identity)
             elif 'ware' in galaxyType:
                 addMalware(object_refs, attributes, galaxy, identity)
-#            elif 'exploit' in galaxyType:
-#                addCampaign(object_refs, attributes, galaxy, identity)
-            elif 'threat-actor' in galaxyType:
+            elif galaxyType in ['threat-actor', 'microsoft-activity-group']:
                 addThreatActor(object_refs, attributes, galaxy, identity)
-            elif 'rat' in galaxyType or 'tool' in galaxyType:
+            elif galaxyType in ['rat', 'exploit-kit'] or 'tool' in galaxyType:
                 addTool(object_refs, attributes, galaxy, identity)
     return attributes
 
@@ -240,9 +241,10 @@ def addCampaign(object_refs, attributes, galaxy, identity):
     campaign_id = "campaign--{}".format(cluster['uuid'])
     name = cluster['value']
     description = cluster['description']
-    labels = 'misp:to_ids=\"{}\"'.format(galaxy['to_ids'])
     campaign_args = {'id': campaign_id, 'type': 'campaign', 'name': name, 'description': description,
-                     'created_by_ref': identity, 'labels': labels}
+                     'created_by_ref': identity}
+    if cluster['tag_name']:
+        campaign_args['labels'] = cluster['tag_name']
     meta = cluster['meta']
     addAliases(meta, campaign_args)
     campaign = Campaign(**campaign_args)
@@ -250,14 +252,21 @@ def addCampaign(object_refs, attributes, galaxy, identity):
     object_refs.append(campaign_id)
 
 def addCourseOfAction(object_refs, attributes, galaxy, identity):
-    courseOfAction_id = "course-of-action--{}".format(galaxy['uuid'])
-    courseOfAction = CourseOfAction()
+    cluster = galaxy['GalaxyCluster'][0]
+    courseOfAction_id = "course-of-action--{}".format(cluster['uuid'])
+    name = cluster['value']
+    description = cluster['description']
+    courseOfAction_args = {'id': courseOfAction_id, 'type': 'course-of-action', 'name': name,
+                           'description': description, 'created_by_ref': identity}
+    if cluster['tag_name']:
+        courseOfAction_args['labels'] = cluster['tag_name']
+    courseOfAction = CourseOfAction(**courseOfAction_args)
     attributes.append(courseOfAction)
     object_refs.append(courseOfAction_id)
 
 def addCustomObject(object_refs, attributes, attribute, identity):
     customObject_id = "x-misp-object--{}".format(attribute['uuid'])
-    timestamp = getDateFromTimestamp(int(attribute['timestamp']))
+    timestamp = attribute['timestamp']
     customObject_type = 'x-misp-object'.format(attribute['type'])
     to_ids = attribute['to_ids']
     value = attribute['value']
@@ -269,6 +278,17 @@ def addCustomObject(object_refs, attributes, attribute, identity):
     # At the moment, we skip it
 #    attributes.append(customObject_args)
 #    object_refs.append(customObject_id)
+
+def addIdentity(object_refs, attributes, attribute, identity):
+    identity_id = "identity--{}".format(attribute['uuid'])
+    name = attribute['value']
+    identityClass = defineIdentityClass(attribute['type'])
+    identity_args = {'id': identity, 'type': 'identity', 'name': name, 'created_by_ref': identity, 'identity_class': identityClass}
+    if 'comment' in attribute:
+        identity_args['descritpion'] = attribute['comment']
+    identityObject = Identity(**identity_args)
+    attributes.append(identityObject)
+    object_refs.append(identityObject)
 
 def addIntrusionSet(object_refs, attributes, galaxy, identity):
     cluster = galaxy['GalaxyCluster'][0]
@@ -311,7 +331,7 @@ def addMalware(object_refs, attributes, galaxy, identity):
 
 def addObservedData(object_refs, attributes, attribute, identity):
     observedData_id = "observed-data--{}".format(attribute['uuid'])
-    timestamp = getDateFromTimestamp(int(attribute['timestamp']))
+    timestamp = attribute['timestamp']
     attr_type = attribute['type']
     attr_val = attribute['value']
     objects = defineObservableObject(attr_type, attr_val)
@@ -377,7 +397,6 @@ def handleNonIndicatorAttribute(object_refs, attributes, attribute, identity):
     attr_type = attribute['type']
     if attr_type == "vulnerability":
         addVulnerability(object_refs, attributes, attribute, identity)
-#    elif "target" in attr_type or attr_type == "attachment":
     else:
         addObservedData(object_refs, attributes, attribute, identity)
 
@@ -389,7 +408,7 @@ def handleIndicatorAttribute(object_refs, attributes, attribute, identity):
     labels = 'misp:to_ids=\"{}\"'.format(attribute['to_ids'])
     attr_type = attribute['type']
     attr_val = attribute['value']
-    args_indicator = {'valid_from': getDateFromTimestamp(int(attribute['timestamp'])), 'type': 'indicator',
+    args_indicator = {'valid_from': attribute['timestamp'], 'type': 'indicator',
                       'labels': labels, 'pattern': [definePattern(attr_type, attr_val)], 'id': indic_id,
                       'created_by_ref': identity, 'kill_chain_phases': killchain}
     if attribute['comment']:
@@ -472,8 +491,14 @@ def defineAddressType(attr_val):
         addr_type = 'ipv4-addr'
     return addr_type
 
+def defineIdentityClass(attr_type):
+    identityClass = 'unknown'
+    if attr_type in ('**name'):
+        identityClass = 'individual'
+    return identityClass
+
 def eventReport(event, identity, object_refs, external_refs):
-    timestamp = getDateFromTimestamp(int(event["publish_timestamp"]))
+    timestamp = event["publish_timestamp"]
     name = event["info"]
     labels = []
     if 'Tag' in event:
@@ -509,23 +534,20 @@ def main(args):
     if len(sys.argv) > 4:
         namespace[1] = sys.argv[4].replace(" ", "_")
         namespace[1] = re.sub('[\W]+', '', namespace[1])
-    event = loadEvent(args, pathname)
-    if 'response' in event:
-        event = event['response'][0]['Event']
-    else:
-        event = event['Event']
+    misp = pymisp.MISPEvent(None, False)
+    misp.load_file(os.path.join(pathname, args[1]))
     SDOs = []
     object_refs = []
     external_refs = []
-    identity = setIdentity(event)
+    identity = setIdentity(misp)
     SDOs.append(identity)
-    attributes = readAttributes(event, identity, object_refs, external_refs)
+    attributes = readAttributes(misp, identity, object_refs, external_refs)
     buildRelationships(attributes, object_refs)
-    report = eventReport(event, identity, object_refs, external_refs)
+    report = eventReport(misp, identity, object_refs, external_refs)
     SDOs.append(report)
     for attribute in attributes:
         SDOs.append(attribute)
-    stix_package = generateEventPackage(event, SDOs)
+    stix_package = generateEventPackage(misp, SDOs)
     saveFile(args, pathname, stix_package)
     print(1)
 
